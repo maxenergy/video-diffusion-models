@@ -243,24 +243,31 @@ from imagen_pytorch import Unet3D, ElucidatedImagen, ImagenTrainer
 from imagen_pytorch.data import Dataset
 
 checkpoints_path = "./"
-last_checkpoint_path = os.path.join(checkpoints_path, "last_checkpoint.txt")
+prev_checkpoint_path = ""
+last_checkpoint_path = ""
+last_checkpoint_path_file = os.path.join(checkpoints_path, "last_checkpoint.txt")
 
 def save_checkpoint(trainer: ImagenTrainer, unet, step):
     print("Saving checkpoint")
     current_datetime = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     new_checkpoint_path = os.path.join(checkpoints_path, f"checkpoint-unet{unet}-step{step}-{current_datetime}.pt")
     trainer.save(new_checkpoint_path)
-    if os.path.exists(last_checkpoint_path):
-        with open(last_checkpoint_path, 'r') as fp:
-            os.remove(fp.readlines()[0])
-    with open(last_checkpoint_path, 'w') as fp:
+    global prev_checkpoint_path
+    global last_checkpoint_path
+    if os.path.exists(prev_checkpoint_path):
+        os.remove(prev_checkpoint_path)
+    prev_checkpoint_path = last_checkpoint_path
+    last_checkpoint_path = new_checkpoint_path
+    with open(last_checkpoint_path_file, 'w') as fp:
         fp.write(new_checkpoint_path)
 
 def load_checkpoint(trainer: ImagenTrainer):
-    if not os.path.exists(last_checkpoint_path):
+    global last_checkpoint_path
+    if not os.path.exists(last_checkpoint_path_file):
         return None
-    with open(last_checkpoint_path, 'r') as fp:
+    with open(last_checkpoint_path_file, 'r') as fp:
         checkpoint_path = fp.readlines()[0]
+        last_checkpoint_path = checkpoint_path
         try:
             print("Loading checkpoint")
             trainer.load(checkpoint_path)
