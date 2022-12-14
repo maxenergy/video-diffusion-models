@@ -113,6 +113,10 @@ import torch
 import shutil
 import urllib
 
+from concurrent.futures import ThreadPoolExecutor, wait
+import time
+import threading
+
 train_url = "https://raw.githubusercontent.com/raingo/TGIF-Release/master/data/tgif-v1.0.tsv"
 train_data = "./train_data.tvs"
 train_index = "./train_index.txt"
@@ -152,13 +156,12 @@ def get_videos(index_start, index_end):
     
     texts = []
     list_videos = []
-    max_iter = 100
 
     with open("train_data.tvs") as fp:
         for i, line in enumerate(fp):
             if i >= index_start and i< index_end :
-                file_img, file_text = line.split("\t")
                 try:
+                    file_img, file_text = line.split("\t")
                     print(f"Downloading image {i}")
                     download_url(file_img, "./", "download.gif")
                     tensor = gif_to_tensor('download.gif', width = image_size, height = image_size, frames = frames)
@@ -172,6 +175,41 @@ def get_videos(index_start, index_end):
             elif i > index_end:
                 break
 
+lock = threading.Lock()
+executor = ThreadPoolExecutor(max_workers=8)
+
+def download_process_parallel(index, file_img, file_text):
+    try:
+        print(f"Downloading image {index}")
+        download_url(file_img, "./", f"{index}.gif")
+        tensor = gif_to_tensor(f"{index}.gif", width = image_size, height = image_size, frames = frames)
+        file_text = file_text[:-1] # Remove \n
+        with lock:
+            list_videos.append(tensor)
+            texts.append(file_text)
+        os.remove(f"{index}.gif")
+    except Exception as ex:
+        print(ex)
+        pass
+    
+def get_videos_parallel(index_start, index_end):
+    global texts
+    global list_videos
+    
+    texts = []
+    list_videos = []
+
+    with open("train_data.tvs") as fp:
+        futures = []
+        for i, line in enumerate(fp):
+            if i >= index_start and i< index_end :
+                file_img, file_text = line.split("\t")
+                future = executor.submit(download_process_parallel, i, file_img, file_text)
+                futures.append(future)
+            elif i > index_end:
+                break
+        wait(futures)
+                
 def get_next_videos():
     global current_index
     index = 0
@@ -182,7 +220,8 @@ def get_next_videos():
         with open(train_index, 'r') as fp:
             index = int(fp.readlines()[0])
     index_end = index + download_batch_size
-    get_videos(index, index_end)
+    # get_videos(index, index_end)
+    get_videos_parallel(index, index_end)
     with open(train_index, 'w') as fp:
         fp.write(f"{index_end}")
     current_index = index_end
