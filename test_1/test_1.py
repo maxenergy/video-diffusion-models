@@ -1,42 +1,44 @@
-#!/usr/bin/env python
-# coding: utf-8
-
+# %% [markdown]
 # # Video diffusion models
 
-# ### Check if CUDA is enabled
+# %%
+# Here wget old checkpoint
+# !wget ...
 
-# In[ ]:
-
-
-# get_ipython().system('nvidia-smi')
-
-
-# ## Install dependencies
-
-# In[ ]:
-
-
-# get_ipython().system('pip install torch==1.12.1+cu116 torchvision==0.13.1+cu116 torchaudio==0.12.1 --extra-index-url https://download.pytorch.org/whl/cu116')
-# get_ipython().system('pip install imagen_pytorch==1.16.5')
-
-
-# ## Params
-
-# In[1]:
-
-
+# %%
 # Params
 image_size = 128
-frames = 10
-max_images = 125782
+frames = 12
 download_batch_size = 128
+download_workers = 20
 
+dataset_size = 125782
 
+# If there is a checkpoint these changes automatically at runtime
+epoch = 1
+train_unet = 1
+current_step = 0
+
+# %%
+import time
+import os
+start_time = time.time()
+
+# Clean tmp files
+for file in os.listdir("./"):
+    if file.endswith('.gif'):
+        os.remove(file)
+
+# %% [markdown]
+# ## Install dependencies
+
+# %%
+# !pip install imagen_pytorch==1.16.5
+
+# %% [markdown]
 # ## Utility functions to resize and crop GIFs
 
-# In[3]:
-
-
+# %%
 # GIF pre-processing
 
 import numpy as np
@@ -63,13 +65,13 @@ def center_crop(img, new_width, new_height):
 def resize_crop_img(img, width, height):
     # width < height
     if( img.size[0] < img.size[1]):
-      wpercent = (width/float(img.size[0]))
-      hsize = int((float(img.size[1])*float(wpercent)))
-      img = img.resize((width, hsize), Image.Resampling.LANCZOS)
+        wpercent = (width/float(img.size[0]))
+        hsize = int((float(img.size[1])*float(wpercent)))
+        img = img.resize((width, hsize), Image.Resampling.LANCZOS)
     else: # width >= height
-      hpercent = (height/float(img.size[1]))
-      wsize = int((float(img.size[0])*float(hpercent)))
-      img = img.resize((wsize, height), Image.Resampling.LANCZOS)
+        hpercent = (height/float(img.size[1]))
+        wsize = int((float(img.size[0])*float(hpercent)))
+        img = img.resize((wsize, height), Image.Resampling.LANCZOS)
     img = center_crop(img, width, height)
     # print(img.size[0])
     # print(img.size[1])
@@ -102,12 +104,10 @@ def gif_to_tensor(path, width = 256, height = 256, frames = 32, channels = 3, tr
     tensors = tuple(map(transform, imgs))
     return torch.stack(tensors, dim = 1)
 
-
+# %% [markdown]
 # ## Utility functions to download dataset
 
-# In[4]:
-
-
+# %%
 import os
 import torch
 import shutil
@@ -119,9 +119,8 @@ import threading
 
 train_url = "https://raw.githubusercontent.com/raingo/TGIF-Release/master/data/tgif-v1.0.tsv"
 train_data = "./train_data.tvs"
-train_index = "./train_index.txt"
 
-current_index = 0
+current_step = 0
 texts = []
 list_videos = []
 
@@ -176,7 +175,7 @@ def get_videos(index_start, index_end):
                 break
 
 lock = threading.Lock()
-executor = ThreadPoolExecutor(max_workers=8)
+executor = ThreadPoolExecutor(max_workers=download_workers)
 
 def download_process_parallel(index, file_img, file_text):
     try:
@@ -211,73 +210,81 @@ def get_videos_parallel(index_start, index_end):
         wait(futures)
                 
 def get_next_videos():
-    global current_index
-    index = 0
-    if not os.path.exists(train_index):
-        with open(train_index, 'w') as fp:
-            fp.write("0")
-    else:
-        with open(train_index, 'r') as fp:
-            index = int(fp.readlines()[0])
-    index_end = index + download_batch_size
-    # get_videos(index, index_end)
-    get_videos_parallel(index, index_end)
-    with open(train_index, 'w') as fp:
-        fp.write(f"{index_end}")
-    current_index = index_end
+    global current_step
+    get_videos_parallel(current_step, current_step + download_batch_size)
+    current_step += len(texts)
 
+# Download train data file
 if not os.path.exists(train_data):
     download_url(train_url, "./", train_data)
 
-
+# %% [markdown]
 # ## Utility functions to save and load checkpoints
 
-# In[5]:
-
-
+# %%
 import shutil
 import torch
-import datetime
+import time
 import gc
+import os
 from imagen_pytorch import Unet3D, ElucidatedImagen, ImagenTrainer
 from imagen_pytorch.data import Dataset
 
 checkpoints_path = "./"
-prev_checkpoint_path = ""
-last_checkpoint_path = ""
-last_checkpoint_path_file = os.path.join(checkpoints_path, "last_checkpoint.txt")
+checkpoint_path = ""
 
-def save_checkpoint(trainer: ImagenTrainer, unet, step):
+def save_checkpoint(trainer: ImagenTrainer):
+    global checkpoint_path
     print("Saving checkpoint")
-    current_datetime = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    new_checkpoint_path = os.path.join(checkpoints_path, f"checkpoint-unet{unet}-step{step}-{current_datetime}.pt")
-    trainer.save(new_checkpoint_path)
-    global prev_checkpoint_path
-    global last_checkpoint_path
-    if os.path.exists(prev_checkpoint_path):
-        os.remove(prev_checkpoint_path)
-    prev_checkpoint_path = last_checkpoint_path
-    last_checkpoint_path = new_checkpoint_path
-    with open(last_checkpoint_path_file, 'w') as fp:
-        fp.write(new_checkpoint_path)
+    current_time = int(time.time())
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+    checkpoint_path = os.path.join(checkpoints_path, f"checkpoint-unet_{train_unet}-epoch_{epoch}-step_{current_step}-{current_time}.pt")
+    trainer.save(checkpoint_path)
 
+def update_config(checkpoint):
+    global epoch
+    global train_unet
+    global current_step
+    splitted = (checkpoint.replace(".pt", "").split("checkpoint-")[1]).split("-")
+    print(splitted)
+    train_unet = int(splitted[0].replace("unet_", ""))
+    epoch = int(splitted[1].replace("epoch_", ""))
+    current_step = int(splitted[2].replace("step_", ""))
+    print("Loaded configuration")
+    print(f"Step: {current_step}")
+    print(f"Epoch: {epoch}")
+    print(f"Unet: {train_unet}")
+    if current_step >= dataset_size:
+        if train_unet == 2:
+            print("End of training Unet 2 -> New epoch")
+            train_unet = 1
+            epoch += 1
+        else:
+            print("End of training Unet 1")
+            train_unet = 2
+        current_step = 0
+        print("New configuration")
+        print(f"Step: {current_step}")
+        print(f"Epoch: {epoch}")
+        print(f"Unet: {train_unet}")
+        
 def load_checkpoint(trainer: ImagenTrainer):
-    global last_checkpoint_path
-    if not os.path.exists(last_checkpoint_path_file):
+    global checkpoint_path
+    timestamp = -1
+    for file in os.listdir(checkpoints_path):
+        if file.endswith('.pt'):
+            new_timestamp = int((file.split("-")[4]).replace(".pt", ""))
+            if new_timestamp > timestamp:
+                checkpoint_path = os.path.join(checkpoints_path, file)
+                timestamp = new_timestamp        
+    if not os.path.exists(checkpoint_path):
+        print("No checkpoint found -> starting from scratch")
         return None
-    with open(last_checkpoint_path_file, 'r') as fp:
-        checkpoint_path = fp.readlines()[0]
-        last_checkpoint_path = checkpoint_path
-        try:
-            print("Loading checkpoint")
-            trainer.load(checkpoint_path)
-        except:
-            return None
+    trainer.load(checkpoint_path)
+    update_config(checkpoint_path)
 
-
-# In[6]:
-
-
+# %%
 unet1 = Unet3D(
     dim = 64,
     cond_dim = 128,
@@ -318,67 +325,43 @@ imagen = ElucidatedImagen(
 trainer = ImagenTrainer(imagen)
 
 
-# ## Train Unet 1
+# %% [markdown]
+# ## Train Unet
 
-# In[7]:
-
-
-# Train Unet 1
-unet = 1
+# %%
+# Train 
 load_checkpoint(trainer)
-
+counter = 0
 while True:
+    # if execution time is more than 11h40m stops
+    if time.time() - start_time > 42000:
+        break
     get_next_videos()
+    # if there are no more videos stops
     if len(texts) == 0:
         break
     print("Generating tensor from videos")
     videos = torch.stack(list_videos, dim = 0).cuda()
-    print(f"Training unet-{unet}")
-    trainer(videos, texts = texts, unet_number = unet, max_batch_size = 32)
-    trainer.update(unet_number = unet)
+    print(f"Training Unet {train_unet}")
+    trainer(videos, texts = texts, unet_number = train_unet, max_batch_size = 32)
+    trainer.update(unet_number = train_unet)
     del videos
-    torch.cuda.empty_cache()
-    print("Allocated memory")
-    print(torch.cuda.memory_allocated())
-    save_checkpoint(trainer, unet, current_index)
+    
+    if counter % 100 == 0:
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("Allocated memory")
+        print(torch.cuda.memory_allocated())
+#         save_checkpoint(trainer)
+save_checkpoint(trainer)
 
-
-# ## Train Unet 2
-
-# In[ ]:
-
-
-# # Train Unet 2
-# unet = 2
-# load_checkpoint(trainer)
-
-# while True:
-#     get_next_videos()
-#     if len(texts) == 0:
-#         break
-#     print("Generating tensor from videos")
-#     videos = torch.stack(list_videos, dim = 0).cuda()
-#     print(f"Training unet-{unet}")
-#     trainer(videos, texts = texts, unet_number = unet, max_batch_size = 32)
-#     trainer.update(unet_number = unet)
-#     del videos
-#     torch.cuda.empty_cache()
-#     print("Allocated memory")
-#     print(torch.cuda.memory_allocated())
-#     save_checkpoint(trainer, unet, current_index)
-
-
-# In[ ]:
-
-
+# %%
 # !pip install GPUtil
 
 # from GPUtil import showUtilization as gpu_usage
 # gpu_usage()    
 
-
-# In[ ]:
-
-
+# %%
 #end
+
 
