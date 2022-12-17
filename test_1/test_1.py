@@ -307,7 +307,7 @@ imagen = ElucidatedImagen(
     unets = (unet1, unet2),
     image_sizes = (16, 64),
     random_crop_sizes = (None, 16),
-    num_sample_steps = 10,
+    num_sample_steps = (64, 64),
     # timesteps = 1000,
     cond_drop_prob = 0.1,                       # gives the probability of dropout for classifier-free guidance.
     sigma_min = 0.002,                          # min noise level
@@ -353,6 +353,7 @@ while True:
         print("Allocated memory")
         print(torch.cuda.memory_allocated())
 #         save_checkpoint(trainer)
+    counter +=1
 save_checkpoint(trainer)
 
 # %%
